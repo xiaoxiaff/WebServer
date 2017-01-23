@@ -8,10 +8,12 @@
 #include <sys/socket.h>  // definitions of structures needed for sockets, e.g. sockaddr
 #include <netinet/in.h>  // constants and structures needed for internet domain addresses, e.g. sockaddr_in
 #include <stdlib.h>
-#include <strings.h>
+#include <string.h>
 #include <sys/wait.h>	/* for the waitpid() system call */
 #include <signal.h>	/* signal name macros, and the kill() prototype */
 
+#define STATUS_200 "HTTP/1.1 200 OK\r\n"
+#define STATUS_404 "HTTP/1.1 404 Not Found\r\n\r\n"
 
 void sigchld_handler(int s)
 {
@@ -19,6 +21,7 @@ void sigchld_handler(int s)
 }
 
 void dostuff(int); /* function prototype */
+void serveRequest(int sock);
 void error(char *msg)
 {
     perror(msg);
@@ -76,6 +79,7 @@ int main(int argc, char *argv[])
          if (pid == 0)  { // fork() returns a value of 0 to the child process
              close(sockfd);
              dostuff(newsockfd);
+             serveRequest(newsockfd);
              exit(0);
          }
          else //returns the process ID of the child process to the parent
@@ -91,13 +95,25 @@ int main(int argc, char *argv[])
  *****************************************/
 void dostuff (int sock)
 {
-   int n;
-   char buffer[256];
+  int n;
+  char buffer[512];
       
-   bzero(buffer,256);
-   n = read(sock,buffer,255);
-   if (n < 0) error("ERROR reading from socket");
-   printf("Here is the message: %s\n",buffer);
-   n = write(sock,"I got your message",18);
-   if (n < 0) error("ERROR writing to socket");
+  bzero(buffer,512);
+
+  n = read(sock,buffer,512);
+  if (n < 0) error("ERROR reading from socket");
+  printf("n is: %d, Here is the message: %s\n", n, buffer);
+}
+
+/******** SERVEREQUEST() *********************
+ There is a separate instance of this function 
+ for each connection.  It handles all communication
+ once a connnection has been established.
+ *****************************************/
+void serveRequest(int sock)
+{
+  int n;
+
+  n = write(sock,STATUS_200,strlen(STATUS_200));
+  if (n < 0) error("ERROR writing to socket");
 }
