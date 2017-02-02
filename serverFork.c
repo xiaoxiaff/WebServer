@@ -17,8 +17,10 @@
 #define STATUS_200 "HTTP/1.1 200 OK\r\n"
 #define STATUS_404 "HTTP/1.1 404 Not Found\r\n\r\n"
 
+// the error html output for browser
 #define ERROR_404 "<h1>Error 404: File Not Found</h1> <hr><p>File doesn't exist at the server</p>"
 
+// differnt MIME type
 typedef enum
 {
   html, txt, jpeg, gif, jpg
@@ -27,7 +29,6 @@ format;
 
 /*  returns 1 iff str ends with suffix  */
 int str_ends_with(const char * str, const char * suffix) {
-  printf("f and s: %s, %s\n", str, suffix);
   if( str == NULL || suffix == NULL )
     return 0;
 
@@ -57,11 +58,11 @@ typedef struct RequestHeader {
    char version[9];
 } RequestHeader;
 
-void dostuff(int, RequestHeader*); /* function prototype */
-void serveRequest(int sock, const RequestHeader header);
-void fileNotExist(int sock, const char* file);
-void generateResponse(int sock, format f, size_t filesize);
-format getFileFormat(const char *filename);
+void parseRequest(int, RequestHeader*); /* function prototype */
+void serveRequest(int sock, const RequestHeader header);    // parse the request from browser
+void fileNotExist(int sock, const char* file);              // generate information for any error except 200
+void generateResponse(int sock, format f, size_t filesize); // return the response header to broser
+format getFileFormat(const char *filename);                 // get file format from uri
 
 int main(int argc, char *argv[])
 {
@@ -114,7 +115,8 @@ int main(int argc, char *argv[])
          
          if (pid == 0)  { // fork() returns a value of 0 to the child process
              close(sockfd);
-             dostuff(newsockfd, &header);
+             printf("\n");
+             parseRequest(newsockfd, &header);
              serveRequest(newsockfd, header);
              exit(0);
          }
@@ -124,12 +126,12 @@ int main(int argc, char *argv[])
      return 0; /* we never get here */
 }
 
-/******** DOSTUFF() *********************
+/******** parseRequest() ******************
  There is a separate instance of this function 
  for each connection.  It handles all communication
  once a connnection has been established.
  *****************************************/
-void dostuff (int sock, RequestHeader* header)
+void parseRequest(int sock, RequestHeader* header)
 {
   int n;
   char buffer[512];
@@ -143,7 +145,7 @@ void dostuff (int sock, RequestHeader* header)
   char *token;
   char *item;
   
-  printf("buffer: %s\n", buffer);
+  printf("request info:\n %s\n", buffer);
    /* get the first token */
   token = strtok(buffer, s);
   memset(header->uri, '\0', sizeof(header->uri));
@@ -153,8 +155,6 @@ void dostuff (int sock, RequestHeader* header)
     strcpy(header->uri, item+1);
   if (item = strtok(NULL, split))
     strcpy(header->version, item);
-
-  printf("%s,%s,%s\n", header->method, header->uri, header->version );
 }
 
 /******** SERVEREQUEST() *********************
@@ -164,7 +164,6 @@ void dostuff (int sock, RequestHeader* header)
  *****************************************/
 void serveRequest(int sock, const RequestHeader header)
 {
-  printf("%s\n", header.uri);
   if(header.uri[0]=='\0') {
     fileNotExist(sock, header.uri);
     return;
@@ -200,15 +199,13 @@ void serveRequest(int sock, const RequestHeader header)
 
   format fmat = getFileFormat(header.uri);
 
-  printf("fmat:%d, length:%d, fileLength:%d\n", fmat, length, fileLength);
-
-  //size_t fileLength = fread(buffer, sizeof(char), length, f);
+  printf("resource fmat:%d, length:%d, fileLength:%d\n", fmat, length, fileLength);
 
   buffer[fileLength] = '\0';
 
   generateResponse(sock, fmat, fileLength);
   
-  printf("buffer: %s\n", buffer);
+  printf("response content:\n %s\n", buffer);
   send(sock, buffer, fileLength, 0);
 }
 
@@ -225,31 +222,30 @@ void generateResponse(int sock, format f, size_t filesize)
   char buffer[512];
   printf("generate response\n");
 
+  // set HTML version and statu code
   int offset = 0;
   memcpy(buffer, STATUS_200, strlen(STATUS_200));
   offset += strlen(STATUS_200);
-  printf("before connection close\n");
 
+  // set Connection close state
   char *connection = "Connection: close\r\n";
   memcpy(buffer+offset, connection, strlen(connection));
   offset += strlen(connection);
 
-  printf("before time\n");
+  // set Current date
   time_t now = time(0);
-  struct tm *mytime = localtime(&now); 
-  printf("before allocate\n");
+  struct tm *mytime = localtime(&now);
   char outstr[100];
-  printf("before strftime\n");
   strftime(outstr, sizeof(outstr), "Date: %a, %d %b %Y %H:%M:%S %Z\r\n", mytime);
-  printf("Time is: [%s]\n", outstr);
   memcpy(buffer+offset, outstr, strlen(outstr));
   offset += strlen(outstr);
 
+  // set Server info
   char *server = "Server: yukaiAndrea/1.0\r\n";
   memcpy(buffer+offset, server, strlen(server));
   offset += strlen(server);
-  printf("before content length\n");
 
+  // set Content-Length
   char contentLength[50] = "Content-Length: ";  
   char len[10];
   sprintf (len, "%d", (unsigned int)filesize);
@@ -259,8 +255,7 @@ void generateResponse(int sock, format f, size_t filesize)
   memcpy(buffer+offset, contentLength, strlen(contentLength));
   offset += strlen(contentLength);
 
-  printf("before content type\n");
-
+  // set Content-Type based on uri.
   char *contentType;
   if (f == html)  contentType =  "Content-Type: text/html\r\n";
   if (f == txt)  contentType =  "Content-Type: text/plain\r\n";
@@ -270,9 +265,9 @@ void generateResponse(int sock, format f, size_t filesize)
   memcpy(buffer+offset, contentType, strlen(contentType));
   offset += strlen(contentType);
 
+  // finish the header
   memcpy(buffer+offset, "\r\n\0", 3);
 
-  printf("buffer:%s\n", buffer);
   send(sock, buffer, strlen(buffer), 0);
 }
 
