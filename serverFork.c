@@ -19,6 +19,27 @@
 
 #define ERROR_404 "<h1>Error 404: File Not Found</h1> <hr><p>File doesn't exist at the server</p>"
 
+typedef enum
+{
+  html, txt, jpeg, gif, jpg
+}
+format;
+
+/*  returns 1 iff str ends with suffix  */
+int str_ends_with(const char * str, const char * suffix) {
+  printf("f and s: %s, %s\n", str, suffix);
+  if( str == NULL || suffix == NULL )
+    return 0;
+
+  size_t str_len = strlen(str);
+  size_t suffix_len = strlen(suffix);
+
+  if(suffix_len > str_len)
+    return 0;
+
+  return 0 == strncmp( str + str_len - suffix_len, suffix, suffix_len );
+}
+
 void sigchld_handler(int s)
 {
     while(waitpid(-1, NULL, WNOHANG) > 0);
@@ -39,7 +60,8 @@ typedef struct RequestHeader {
 void dostuff(int, RequestHeader*); /* function prototype */
 void serveRequest(int sock, const RequestHeader header);
 void fileNotExist(int sock, const char* file);
-void generateResponse(int sock, const RequestHeader header);
+void generateResponse(int sock, format f, size_t filesize);
+format getFileFormat(const char *filename);
 
 int main(int argc, char *argv[])
 {
@@ -111,7 +133,7 @@ void dostuff (int sock, RequestHeader* header)
 {
   int n;
   char buffer[512];
-      
+
   bzero(buffer,512);
 
   n = read(sock, buffer, 512);
@@ -124,7 +146,7 @@ void dostuff (int sock, RequestHeader* header)
   printf("buffer: %s\n", buffer);
    /* get the first token */
   token = strtok(buffer, s);
-  memset(header->uri, 0, sizeof(header->uri));
+  memset(header->uri, '\0', sizeof(header->uri));
   if (item = strtok(token, split))
     strcpy(header->method, item);
   if (item = strtok(NULL, split))
@@ -150,33 +172,44 @@ void serveRequest(int sock, const RequestHeader header)
   //write header
   char * buffer = 0;
   long length;
+  size_t fileLength = 0;
   FILE * f = fopen(header.uri, "rb");
 
-  if (f)
-  {
-    fseek (f, 0, SEEK_END);
-    length = ftell (f);
-    fseek (f, 0, SEEK_SET);
-    buffer = malloc (length+1);
-    if (buffer)
-    {
-      fread (buffer, 1, length, f);
-    }
-    fclose (f);
-  }
-  else {
+  if (f == NULL) {
     fileNotExist(sock, header.uri);
     return;
   }
 
-  generateResponse(sock, header);
-  
-  if (buffer)
+  if (fseek (f, 0L, SEEK_END) == 0)
   {
-    buffer[length] = '\0';
-    printf("buffer: %s\n", buffer);
-    send(sock, buffer, strlen(buffer), 0);
+    length = ftell (f);
+    buffer = malloc (sizeof(char)*(length+1));
+    if (fseek (f, 0L, SEEK_SET) != 0) {
+      printf("file size error");
+      fileNotExist(sock, header.uri);
+      return;
+    }
+    if (buffer)
+    {
+      fileLength = fread (buffer, 1, length, f);
+    }
+    fclose (f);
   }
+  else {
+  }
+
+  format fmat = getFileFormat(header.uri);
+
+  printf("fmat:%d, length:%d, fileLength:%d\n", fmat, length, fileLength);
+
+  //size_t fileLength = fread(buffer, sizeof(char), length, f);
+
+  buffer[fileLength] = '\0';
+
+  generateResponse(sock, fmat, fileLength);
+  
+  printf("buffer: %s\n", buffer);
+  send(sock, buffer, fileLength, 0);
 }
 
 void fileNotExist(int sock, const char* file)
@@ -187,7 +220,7 @@ void fileNotExist(int sock, const char* file)
   printf("Error: %s file doesn't Exist!\n", file);
 }
 
-void generateResponse(int sock, const RequestHeader header)
+void generateResponse(int sock, format f, size_t filesize)
 {
   char buffer[512];
   printf("generate response\n");
@@ -195,15 +228,19 @@ void generateResponse(int sock, const RequestHeader header)
   int offset = 0;
   memcpy(buffer, STATUS_200, strlen(STATUS_200));
   offset += strlen(STATUS_200);
+  printf("before connection close\n");
 
   char *connection = "Connection: close\r\n";
   memcpy(buffer+offset, connection, strlen(connection));
   offset += strlen(connection);
 
+  printf("before time\n");
   time_t now = time(0);
-  struct tm tm = *gmtime(&now);
-  char outstr[200];
-  strftime(outstr, sizeof(outstr), "Date: %a, %d %b %Y %H:%M:%S %Z\r\n", &tm);
+  struct tm *mytime = localtime(&now); 
+  printf("before allocate\n");
+  char outstr[100];
+  printf("before strftime\n");
+  strftime(outstr, sizeof(outstr), "Date: %a, %d %b %Y %H:%M:%S %Z\r\n", mytime);
   printf("Time is: [%s]\n", outstr);
   memcpy(buffer+offset, outstr, strlen(outstr));
   offset += strlen(outstr);
@@ -211,11 +248,41 @@ void generateResponse(int sock, const RequestHeader header)
   char *server = "Server: yukaiAndrea/1.0\r\n";
   memcpy(buffer+offset, server, strlen(server));
   offset += strlen(server);
+  printf("before content length\n");
 
-  char *contentType =  "Content-Type: text/html\r\n\0";
+  char contentLength[50] = "Content-Length: ";  
+  char len[10];
+  sprintf (len, "%d", (unsigned int)filesize);
+  strcat(contentLength, len);
+  strcat(contentLength, "\r\n");
+
+  memcpy(buffer+offset, contentLength, strlen(contentLength));
+  offset += strlen(contentLength);
+
+  printf("before content type\n");
+
+  char *contentType;
+  if (f == html)  contentType =  "Content-Type: text/html\r\n";
+  if (f == txt)  contentType =  "Content-Type: text/plain\r\n";
+  if (f == jpeg)  contentType =  "Content-Type: image/jpeg\r\n";
+  if (f == jpg)  contentType =  "Content-Type: image/jpg\r\n";
+  if (f == gif)  contentType =  "Content-Type: image/gif\r\n";
   memcpy(buffer+offset, contentType, strlen(contentType));
   offset += strlen(contentType);
 
+  memcpy(buffer+offset, "\r\n\0", 3);
+
   printf("buffer:%s\n", buffer);
   send(sock, buffer, strlen(buffer), 0);
+}
+
+format getFileFormat(const char *filename)
+{
+  if (str_ends_with(filename, ".html") != NULL) return html;
+  if (str_ends_with(filename, ".txt") != NULL) return txt;
+  if (str_ends_with(filename, ".jpeg") != NULL) return jpeg;
+  if (str_ends_with(filename, ".gif") != NULL) return gif;
+  if (str_ends_with(filename, ".jpg") != NULL) return jpg;
+
+  return txt;
 }
